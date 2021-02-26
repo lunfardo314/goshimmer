@@ -1,56 +1,9 @@
 package utxodb
 
 import (
-	"errors"
 	"github.com/iotaledger/goshimmer/packages/ledgerstate"
 	"golang.org/x/xerrors"
-	"sync"
 )
-
-// UtxoDB is the structure which contains all UTXODB transactions and ledger
-type UtxoDB struct {
-	transactions map[ledgerstate.TransactionID]*ledgerstate.Transaction
-	utxo         map[ledgerstate.OutputID]ledgerstate.Output
-	mutex        *sync.RWMutex
-	genesisTxId  ledgerstate.TransactionID
-}
-
-// New creates new UTXODB instance
-func New() *UtxoDB {
-	u := &UtxoDB{
-		transactions: make(map[ledgerstate.TransactionID]*ledgerstate.Transaction),
-		utxo:         make(map[ledgerstate.OutputID]ledgerstate.Output),
-		mutex:        &sync.RWMutex{},
-	}
-	u.genesisInit()
-	return u
-}
-
-// ValidateTransaction check is the transaction can be added to the ledger
-func (u *UtxoDB) ValidateTransaction(tx *ledgerstate.Transaction) error {
-	if err := u.CheckInputsOutputs(tx); err != nil {
-		return xerrors.Errorf("utxodb: %v: txid %s", err, tx.ID().String())
-	}
-	if !tx.SignaturesValid() {
-		return xerrors.Errorf("utxodb: invalid signature txid = %s", tx.ID().String())
-	}
-	return nil
-}
-
-// AreConflicting checks if two transactions double-spend (has equal inputs)
-func AreConflicting(tx1, tx2 *ledgerstate.Transaction) bool {
-	if tx1.ID() == tx2.ID() {
-		return true
-	}
-	for _, inp1 := range tx1.Essence().Inputs() {
-		for _, inp2 := range tx2.Essence().Inputs() {
-			if inp2.Compare(inp1) == 0 {
-				return true
-			}
-		}
-	}
-	return false
-}
 
 // IsConfirmed checks if the transaction is in the UTXODB (in the ledger)
 func (u *UtxoDB) IsConfirmed(txid *ledgerstate.TransactionID) bool {
@@ -60,37 +13,16 @@ func (u *UtxoDB) IsConfirmed(txid *ledgerstate.TransactionID) bool {
 	return ok
 }
 
-func (u *UtxoDB) CheckCanBeAdded(tx *ledgerstate.Transaction) error {
-	if _, ok := u.transactions[tx.ID()]; ok {
-		return xerrors.Errorf("utxodb: duplicate transaction %s", tx.ID().String())
-	}
-	// check if outputs exist
-	for _, inp := range tx.Essence().Inputs() {
-		if inp.Type() != ledgerstate.UTXOInputType {
-			return xerrors.Errorf("utxodb.AddTransaction: UTXOInputType expected")
-		}
-		utxoInp := inp.(*ledgerstate.UTXOInput)
-		if _, ok := u.utxo[utxoInp.ReferencedOutputID()]; !ok {
-			return xerrors.Errorf("utxodb.AddTransaction: referenced output not found. May be already spent. txid = %s", tx.ID().String())
-		}
-	}
-	return nil
-}
-
 // AddTransaction adds transaction to UTXODB or return an error.
 // The function ensures consistency of the UTXODB ledger
 func (u *UtxoDB) AddTransaction(tx *ledgerstate.Transaction) error {
-	if err := u.ValidateTransaction(tx); err != nil {
-		return err
-	}
-
 	u.mutex.Lock()
 	defer u.mutex.Unlock()
 
-	if err := u.CheckCanBeAdded(tx); err != nil {
+	if err := u.validate(tx); err != nil {
 		return err
 	}
-	// delete consumed (referenced) outputs from ledger
+	// delete consumed (referenced) outputs from the ledger
 	for _, inp := range tx.Essence().Inputs() {
 		utxoInp := inp.(*ledgerstate.UTXOInput)
 		delete(u.utxo, utxoInp.ReferencedOutputID())
@@ -100,14 +32,15 @@ func (u *UtxoDB) AddTransaction(tx *ledgerstate.Transaction) error {
 		if out.ID().TransactionID() != tx.ID() {
 			panic("utxodb.AddTransaction: incorrect output ID")
 		}
-		switch to := out.Clone().(type) {
+		outClone := out.Clone()
+		switch o := outClone.(type) {
 		case *ledgerstate.SigLockedColoredOutput:
-			to.UpdateMintingColor()
+			o.UpdateMintingColor()
 		case *ledgerstate.SigLockedSingleOutput:
 		default:
 			panic("utxodb.AddTransaction: unknown type")
 		}
-		u.utxo[out.ID()] = out
+		u.utxo[out.ID()] = outClone
 	}
 	u.transactions[tx.ID()] = tx
 	u.checkLedgerBalance()
@@ -151,9 +84,10 @@ func (u *UtxoDB) GetAddressOutputs(addr ledgerstate.Address) ledgerstate.Outputs
 }
 
 func (u *UtxoDB) getAddressOutputs(addr ledgerstate.Address) ledgerstate.Outputs {
+	addrArr := addr.Array()
 	outs := make([]ledgerstate.Output, 0)
 	for _, out := range u.utxo {
-		if out.Address() == addr {
+		if out.Address().Array() == addrArr {
 			outs = append(outs, out)
 		}
 	}
@@ -185,4 +119,106 @@ func (u *UtxoDB) checkLedgerBalance() {
 	if total != supply {
 		panic("utxodb: wrong ledger balance")
 	}
+}
+
+// ValidateTransaction check is the transaction can be added to the ledger
+func (u *UtxoDB) validate(tx *ledgerstate.Transaction) error {
+	inbals, insum, err := u.collectInputBalances(tx)
+	if err != nil {
+		return xerrors.Errorf("utxodb.validate: wrong inputs: %v", err)
+	}
+	outbals, outsum := collectOutputBalances(tx)
+	if insum != outsum {
+		return xerrors.New("utxodb.validate unequal totals")
+	}
+	for col, inb := range inbals {
+		if col == ledgerstate.ColorMint {
+			return xerrors.New("utxodb.validate: assertion failed: input cannot ")
+		}
+		if col == ledgerstate.ColorIOTA {
+			continue
+		}
+		outb, ok := outbals[col]
+		if !ok {
+			continue
+		}
+		if outb > inb {
+			// colored supply can't be inflated
+			return xerrors.New("utxodb.validate: colored supply can't be inflated")
+		}
+	}
+	if err := u.checkUnlockBlocks(tx); err != nil {
+		return xerrors.Errorf("utxodb.validate: invalid unlock block txid = %s", tx.ID().String())
+	}
+	return nil
+}
+
+func (u *UtxoDB) checkUnlockBlocks(tx *ledgerstate.Transaction) error {
+	unlockBlocks := tx.UnlockBlocks()
+	if len(tx.Essence().Inputs()) != len(unlockBlocks) {
+		return xerrors.New("number of unlock blocks and inputs mismatch")
+	}
+	outputs, err := u.collectInputs(tx)
+	if err != nil {
+		return err
+	}
+	for i, out := range outputs {
+		valid, err := out.UnlockValid(tx, unlockBlocks[i])
+		if err != nil {
+			return err
+		}
+		if !valid {
+			return xerrors.Errorf("invalid unlock block %%d", i)
+		}
+	}
+	return nil
+}
+
+func (u *UtxoDB) collectInputs(tx *ledgerstate.Transaction) (ledgerstate.Outputs, error) {
+	ret := make(ledgerstate.Outputs, len(tx.Essence().Inputs()))
+	for i, inp := range tx.Essence().Inputs() {
+		if inp.Type() != ledgerstate.UTXOInputType {
+			return nil, xerrors.New("utxodb.collectInputBalances: wrong input type")
+		}
+		utxoInp := inp.(*ledgerstate.UTXOInput)
+		var ok bool
+		if ret[i], ok = u.utxo[utxoInp.ReferencedOutputID()]; !ok {
+			return nil, xerrors.New("utxodb.collectInputBalances: output does not exist")
+		}
+	}
+	return ret, nil
+}
+
+func (u *UtxoDB) collectInputBalances(tx *ledgerstate.Transaction) (map[ledgerstate.Color]uint64, uint64, error) {
+	ret := make(map[ledgerstate.Color]uint64)
+	retsum := uint64(0)
+
+	outputs, err := u.collectInputs(tx)
+	if err != nil {
+		return nil, 0, err
+	}
+	for _, out := range outputs {
+		out.Balances().ForEach(func(col ledgerstate.Color, bal uint64) bool {
+			s, _ := ret[col]
+			ret[col] = s + bal
+			retsum += bal
+			return true
+		})
+	}
+	return ret, retsum, nil
+}
+
+func collectOutputBalances(tx *ledgerstate.Transaction) (map[ledgerstate.Color]uint64, uint64) {
+	ret := make(map[ledgerstate.Color]uint64)
+	retsum := uint64(0)
+
+	for _, out := range tx.Essence().Outputs() {
+		out.Balances().ForEach(func(col ledgerstate.Color, bal uint64) bool {
+			s, _ := ret[col]
+			ret[col] = s + bal
+			retsum += bal
+			return true
+		})
+	}
+	return ret, retsum
 }
