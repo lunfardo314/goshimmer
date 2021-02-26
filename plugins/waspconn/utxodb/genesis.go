@@ -84,7 +84,9 @@ func (u *UtxoDB) mustRequestFundsTx(target ledgerstate.Address) *ledgerstate.Tra
 		panic(xerrors.New("requestFundsTx: not enough iotas in genesis!"))
 	}
 	inputs := ledgerstate.NewInputs(ledgerstate.NewUTXOInput(out.ID()))
-	outputs := ledgerstate.NewOutputs(ledgerstate.NewSigLockedSingleOutput(RequestFundsAmount, target))
+	out1 := ledgerstate.NewSigLockedSingleOutput(RequestFundsAmount, target)
+	out2 := ledgerstate.NewSigLockedSingleOutput(b-RequestFundsAmount, u.GetGenesisAddress())
+	outputs := ledgerstate.NewOutputs(out1, out2)
 	essence := ledgerstate.NewTransactionEssence(essenceVersion, time.Now(), identity.ID{}, identity.ID{}, inputs, outputs)
 	signature := ledgerstate.NewED25519Signature(u.genesisKeyPair.PublicKey, u.genesisKeyPair.PrivateKey.Sign(essence.Bytes()))
 	unlockBlock := ledgerstate.NewSignatureUnlockBlock(signature)
