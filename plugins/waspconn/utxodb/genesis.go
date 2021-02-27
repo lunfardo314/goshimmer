@@ -2,6 +2,7 @@ package utxodb
 
 import (
 	"github.com/iotaledger/goshimmer/packages/ledgerstate"
+	"github.com/iotaledger/goshimmer/plugins/waspconn/txbuilder"
 	"github.com/iotaledger/hive.go/crypto/ed25519"
 	"github.com/iotaledger/hive.go/identity"
 	"golang.org/x/xerrors"
@@ -76,18 +77,13 @@ const RequestFundsAmount = 1337 // same as Goshimmer Faucet
 func (u *UtxoDB) mustRequestFundsTx(target ledgerstate.Address) *ledgerstate.Transaction {
 	sourceOutputs := u.GetAddressOutputs(u.GetGenesisAddress())
 	if len(sourceOutputs) != 1 {
-		panic(xerrors.New("requestFundsTx: should be only one genesis output"))
+		panic(xerrors.New("mustRequestFundsTx: should be only one genesis output"))
 	}
-	out := sourceOutputs[0]
-	b, ok := out.Balances().Get(ledgerstate.ColorIOTA)
-	if !ok || b < RequestFundsAmount {
-		panic(xerrors.New("requestFundsTx: not enough iotas in genesis!"))
+	builder := txbuilder.MustNew(sourceOutputs)
+	essence, err := builder.BuildIOTATransfer(target, RequestFundsAmount)
+	if err != nil {
+		panic(err)
 	}
-	inputs := ledgerstate.NewInputs(ledgerstate.NewUTXOInput(out.ID()))
-	out1 := ledgerstate.NewSigLockedSingleOutput(RequestFundsAmount, target)
-	out2 := ledgerstate.NewSigLockedSingleOutput(b-RequestFundsAmount, u.GetGenesisAddress())
-	outputs := ledgerstate.NewOutputs(out1, out2)
-	essence := ledgerstate.NewTransactionEssence(essenceVersion, time.Now(), identity.ID{}, identity.ID{}, inputs, outputs)
 	signature := ledgerstate.NewED25519Signature(u.genesisKeyPair.PublicKey, u.genesisKeyPair.PrivateKey.Sign(essence.Bytes()))
 	unlockBlock := ledgerstate.NewSignatureUnlockBlock(signature)
 	ret := ledgerstate.NewTransaction(essence, ledgerstate.UnlockBlocks{unlockBlock})
