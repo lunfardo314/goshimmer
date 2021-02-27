@@ -17,10 +17,10 @@ type Builder struct {
 	doNotCompress     bool
 }
 
-func New(outputs ledgerstate.Outputs) (*Builder, error) {
+func New(outputs ledgerstate.Outputs) *Builder {
 	senderAddr, err := takeSenderAddress(outputs)
 	if err != nil {
-		return nil, err
+		return nil
 	}
 	ret := &Builder{
 		timestamp:     time.Now(),
@@ -29,14 +29,6 @@ func New(outputs ledgerstate.Outputs) (*Builder, error) {
 	}
 	for i, out := range outputs {
 		ret.consumables[i] = NewConsumableOutput(out)
-	}
-	return ret, nil
-}
-
-func MustNew(outputs ledgerstate.Outputs) *Builder {
-	ret, err := New(outputs)
-	if err != nil {
-		panic(err)
 	}
 	return ret
 }

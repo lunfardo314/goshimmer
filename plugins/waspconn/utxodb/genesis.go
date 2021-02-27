@@ -5,7 +5,6 @@ import (
 	"github.com/iotaledger/goshimmer/plugins/waspconn/txbuilder"
 	"github.com/iotaledger/hive.go/crypto/ed25519"
 	"github.com/iotaledger/hive.go/identity"
-	"golang.org/x/xerrors"
 	"sync"
 	"time"
 )
@@ -76,10 +75,7 @@ const RequestFundsAmount = 1337 // same as Goshimmer Faucet
 
 func (u *UtxoDB) mustRequestFundsTx(target ledgerstate.Address) *ledgerstate.Transaction {
 	sourceOutputs := u.GetAddressOutputs(u.GetGenesisAddress())
-	if len(sourceOutputs) != 1 {
-		panic(xerrors.New("mustRequestFundsTx: should be only one genesis output"))
-	}
-	builder := txbuilder.MustNew(sourceOutputs)
+	builder := txbuilder.New(sourceOutputs)
 	essence, err := builder.BuildIOTATransfer(target, RequestFundsAmount)
 	if err != nil {
 		panic(err)

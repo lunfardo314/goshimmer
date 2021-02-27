@@ -55,6 +55,44 @@ func (u *UtxoDB) GetTransaction(id ledgerstate.TransactionID) (*ledgerstate.Tran
 	return u.getTransaction(id)
 }
 
+// MustGetTransaction same as GetTransaction only panics if transaction is not in UTXODB
+func (u *UtxoDB) MustGetTransaction(id ledgerstate.TransactionID) *ledgerstate.Transaction {
+	u.mutex.RLock()
+	defer u.mutex.RUnlock()
+	return u.mustGetTransaction(id)
+}
+
+// GetAddressOutputs returns outputs contained in the address
+func (u *UtxoDB) GetAddressOutputs(addr ledgerstate.Address) []ledgerstate.Output {
+	u.mutex.RLock()
+	defer u.mutex.RUnlock()
+
+	return u.getAddressOutputs(addr)
+}
+
+func (u *UtxoDB) GetAddressBalances(addr ledgerstate.Address) map[ledgerstate.Color]uint64 {
+	ret := make(map[ledgerstate.Color]uint64)
+	outputs := u.GetAddressOutputs(addr)
+	for _, out := range outputs {
+		out.Balances().ForEach(func(col ledgerstate.Color, bal uint64) bool {
+			s, _ := ret[col]
+			ret[col] = s + bal
+			return true
+		})
+	}
+	return ret
+}
+
+func (u *UtxoDB) Balance(addr ledgerstate.Address, color ledgerstate.Color) uint64 {
+	bals := u.GetAddressBalances(addr)
+	ret, _ := bals[color]
+	return ret
+}
+
+func (u *UtxoDB) BalanceIOTA(addr ledgerstate.Address) uint64 {
+	return u.Balance(addr, ledgerstate.ColorIOTA)
+}
+
 func (u *UtxoDB) getTransaction(id ledgerstate.TransactionID) (*ledgerstate.Transaction, bool) {
 	tx, ok := u.transactions[id]
 	return tx, ok
@@ -68,30 +106,15 @@ func (u *UtxoDB) mustGetTransaction(id ledgerstate.TransactionID) *ledgerstate.T
 	return tx
 }
 
-// MustGetTransaction same as GetTransaction only panics if transaction is not in UTXODB
-func (u *UtxoDB) MustGetTransaction(id ledgerstate.TransactionID) *ledgerstate.Transaction {
-	u.mutex.RLock()
-	defer u.mutex.RUnlock()
-	return u.mustGetTransaction(id)
-}
-
-// GetAddressOutputs returns outputs contained in the address
-func (u *UtxoDB) GetAddressOutputs(addr ledgerstate.Address) ledgerstate.Outputs {
-	u.mutex.RLock()
-	defer u.mutex.RUnlock()
-
-	return u.getAddressOutputs(addr)
-}
-
-func (u *UtxoDB) getAddressOutputs(addr ledgerstate.Address) ledgerstate.Outputs {
+func (u *UtxoDB) getAddressOutputs(addr ledgerstate.Address) []ledgerstate.Output {
 	addrArr := addr.Array()
-	outs := make([]ledgerstate.Output, 0)
+	ret := make([]ledgerstate.Output, 0)
 	for _, out := range u.utxo {
 		if out.Address().Array() == addrArr {
-			outs = append(outs, out)
+			ret = append(ret, out)
 		}
 	}
-	return ledgerstate.NewOutputs(outs...)
+	return ret
 }
 
 func (u *UtxoDB) getOutputTotal(outid ledgerstate.OutputID) (uint64, error) {
