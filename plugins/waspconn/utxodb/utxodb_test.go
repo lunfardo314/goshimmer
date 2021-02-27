@@ -2,7 +2,7 @@ package utxodb
 
 import (
 	"github.com/iotaledger/goshimmer/packages/ledgerstate"
-	"github.com/iotaledger/goshimmer/plugins/waspconn/txbuilder"
+	"github.com/iotaledger/goshimmer/plugins/waspconn/txutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"testing"
@@ -61,14 +61,10 @@ func TestSendIotas(t *testing.T) {
 
 	outputs := u.GetAddressOutputs(addr1)
 	require.EqualValues(t, 1, len(outputs))
-	txb := txbuilder.New(ledgerstate.NewOutputs(outputs...))
-	essence, err := txb.BuildIOTATransfer(addr2, 42)
+	txb := txutil.NewBuilder(ledgerstate.NewOutputs(outputs...))
+	err = txb.AddIOTATransfer(addr2, 42)
 	require.NoError(t, err)
-
-	signature := ledgerstate.NewED25519Signature(user1.PublicKey, user1.PrivateKey.Sign(essence.Bytes()))
-	unlockBlock := ledgerstate.NewSignatureUnlockBlock(signature)
-	tx := ledgerstate.NewTransaction(essence, ledgerstate.UnlockBlocks{unlockBlock})
-
+	tx := txb.BuildWithED25519(user1)
 	err = u.AddTransaction(tx)
 	require.NoError(t, err)
 
@@ -95,18 +91,97 @@ func TestSendIotasMany(t *testing.T) {
 	for i := uint64(0); i < howMany; i++ {
 		outputs := u.GetAddressOutputs(addr1)
 		require.EqualValues(t, 1, len(outputs))
-		txb := txbuilder.New(ledgerstate.NewOutputs(outputs...))
-		essence, err := txb.BuildIOTATransfer(addr2, 1)
+		txb := txutil.NewBuilder(ledgerstate.NewOutputs(outputs...))
+		err := txb.AddIOTATransfer(addr2, 1)
 		require.NoError(t, err)
+		tx := txb.BuildWithED25519(user1)
+		err = u.AddTransaction(tx)
+		require.NoError(t, err)
+	}
+	require.EqualValues(t, RequestFundsAmount-howMany, u.BalanceIOTA(addr1))
+	require.EqualValues(t, howMany, u.BalanceIOTA(addr2))
+}
 
-		signature := ledgerstate.NewED25519Signature(user1.PublicKey, user1.PrivateKey.Sign(essence.Bytes()))
-		unlockBlock := ledgerstate.NewSignatureUnlockBlock(signature)
-		tx := ledgerstate.NewTransaction(essence, ledgerstate.UnlockBlocks{unlockBlock})
+func TestSendIotas1FromMany(t *testing.T) {
+	u := New()
+	user1 := NewKeyPairFromSeed(1)
+	addr1 := ledgerstate.NewED25519Address(user1.PublicKey)
+	_, err := u.RequestFunds(addr1)
+	require.NoError(t, err)
 
+	user2 := NewKeyPairFromSeed(2)
+	addr2 := ledgerstate.NewED25519Address(user2.PublicKey)
+	require.EqualValues(t, 0, u.BalanceIOTA(addr2))
+
+	require.EqualValues(t, RequestFundsAmount, u.BalanceIOTA(addr1))
+	require.EqualValues(t, 0, u.BalanceIOTA(addr2))
+
+	for i := uint64(0); i < howMany; i++ {
+		outputs := u.GetAddressOutputs(addr1)
+		require.EqualValues(t, 1, len(outputs))
+		txb := txutil.NewBuilder(ledgerstate.NewOutputs(outputs...))
+		err := txb.AddIOTATransfer(addr2, 1)
+		require.NoError(t, err)
+		tx := txb.BuildWithED25519(user1)
 		err = u.AddTransaction(tx)
 		require.NoError(t, err)
 	}
 
 	require.EqualValues(t, RequestFundsAmount-howMany, u.BalanceIOTA(addr1))
 	require.EqualValues(t, howMany, u.BalanceIOTA(addr2))
+
+	outputs := u.GetAddressOutputs(addr2)
+	require.EqualValues(t, howMany, len(outputs))
+
+	txb := txutil.NewBuilder(outputs)
+	err = txb.AddIOTATransfer(addr1, 1)
+	require.NoError(t, err)
+	tx := txb.BuildWithED25519(user2)
+	err = u.AddTransaction(tx)
+	require.NoError(t, err)
+
+	require.EqualValues(t, RequestFundsAmount-howMany+1, u.BalanceIOTA(addr1))
+	require.EqualValues(t, howMany-1, u.BalanceIOTA(addr2))
+}
+
+func TestSendIotasManyFromMany(t *testing.T) {
+	u := New()
+	user1 := NewKeyPairFromSeed(1)
+	addr1 := ledgerstate.NewED25519Address(user1.PublicKey)
+	_, err := u.RequestFunds(addr1)
+	require.NoError(t, err)
+
+	user2 := NewKeyPairFromSeed(2)
+	addr2 := ledgerstate.NewED25519Address(user2.PublicKey)
+	require.EqualValues(t, 0, u.BalanceIOTA(addr2))
+
+	require.EqualValues(t, RequestFundsAmount, u.BalanceIOTA(addr1))
+	require.EqualValues(t, 0, u.BalanceIOTA(addr2))
+
+	for i := uint64(0); i < howMany; i++ {
+		outputs := u.GetAddressOutputs(addr1)
+		require.EqualValues(t, 1, len(outputs))
+		txb := txutil.NewBuilder(ledgerstate.NewOutputs(outputs...))
+		err := txb.AddIOTATransfer(addr2, 1)
+		require.NoError(t, err)
+		tx := txb.BuildWithED25519(user1)
+		err = u.AddTransaction(tx)
+		require.NoError(t, err)
+	}
+
+	require.EqualValues(t, RequestFundsAmount-howMany, u.BalanceIOTA(addr1))
+	require.EqualValues(t, howMany, u.BalanceIOTA(addr2))
+
+	outputs := u.GetAddressOutputs(addr2)
+	require.EqualValues(t, howMany, len(outputs))
+
+	txb := txutil.NewBuilder(outputs)
+	err = txb.AddIOTATransfer(addr1, howMany/2)
+	require.NoError(t, err)
+	tx := txb.BuildWithED25519(user2)
+	err = u.AddTransaction(tx)
+	require.NoError(t, err)
+
+	require.EqualValues(t, RequestFundsAmount-howMany/2, u.BalanceIOTA(addr1))
+	require.EqualValues(t, howMany/2, u.BalanceIOTA(addr2))
 }

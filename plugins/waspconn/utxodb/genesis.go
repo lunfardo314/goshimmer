@@ -2,7 +2,7 @@ package utxodb
 
 import (
 	"github.com/iotaledger/goshimmer/packages/ledgerstate"
-	"github.com/iotaledger/goshimmer/plugins/waspconn/txbuilder"
+	"github.com/iotaledger/goshimmer/plugins/waspconn/txutil"
 	"github.com/iotaledger/hive.go/crypto/ed25519"
 	"github.com/iotaledger/hive.go/identity"
 	"sync"
@@ -75,15 +75,11 @@ const RequestFundsAmount = 1337 // same as Goshimmer Faucet
 
 func (u *UtxoDB) mustRequestFundsTx(target ledgerstate.Address) *ledgerstate.Transaction {
 	sourceOutputs := u.GetAddressOutputs(u.GetGenesisAddress())
-	builder := txbuilder.New(sourceOutputs)
-	essence, err := builder.BuildIOTATransfer(target, RequestFundsAmount)
-	if err != nil {
+	builder := txutil.NewBuilder(sourceOutputs)
+	if err := builder.AddIOTATransfer(target, RequestFundsAmount); err != nil {
 		panic(err)
 	}
-	signature := ledgerstate.NewED25519Signature(u.genesisKeyPair.PublicKey, u.genesisKeyPair.PrivateKey.Sign(essence.Bytes()))
-	unlockBlock := ledgerstate.NewSignatureUnlockBlock(signature)
-	ret := ledgerstate.NewTransaction(essence, ledgerstate.UnlockBlocks{unlockBlock})
-	return ret
+	return builder.BuildWithED25519(u.genesisKeyPair)
 }
 
 // RequestFunds implements faucet: it sends 1337 IOTA tokens from genesis to the given address.

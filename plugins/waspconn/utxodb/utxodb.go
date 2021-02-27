@@ -186,12 +186,25 @@ func (u *UtxoDB) checkUnlockBlocks(tx *ledgerstate.Transaction) error {
 		return err
 	}
 	for i, out := range outputs {
-		valid, err := out.UnlockValid(tx, unlockBlocks[i])
+		var signatureBlock ledgerstate.UnlockBlock
+		var err error
+		switch ub := unlockBlocks[i].(type) {
+		case *ledgerstate.SignatureUnlockBlock:
+			signatureBlock = ub
+		case *ledgerstate.ReferenceUnlockBlock:
+			if int(ub.ReferencedIndex()) >= len(unlockBlocks) {
+				panic("wrong referenced unlock bkock index")
+			}
+			signatureBlock = unlockBlocks[ub.ReferencedIndex()]
+		default:
+			return xerrors.New("wrong unlock block type")
+		}
+		valid, err := out.UnlockValid(tx, signatureBlock)
 		if err != nil {
 			return err
 		}
 		if !valid {
-			return xerrors.Errorf("invalid unlock block %%d", i)
+			return xerrors.New("invalid signature")
 		}
 	}
 	return nil

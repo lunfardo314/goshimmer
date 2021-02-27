@@ -872,7 +872,7 @@ func (u *UTXODAG) lockTransaction(transaction *Transaction) {
 		lockBuilder.AddLock(NewOutputID(transaction.ID(), uint16(outputIndex)))
 	}
 	var mutex syncutils.RWMultiMutex
-	mutex.Lock(lockBuilder.Build()...)
+	mutex.Lock(lockBuilder.BuildEssence()...)
 }
 */
 
