@@ -32,11 +32,12 @@ func (u *UtxoDB) AddTransaction(tx *ledgerstate.Transaction) error {
 		if out.ID().TransactionID() != tx.ID() {
 			panic("utxodb.AddTransaction: incorrect output ID")
 		}
-		outClone := out.Clone()
-		switch o := outClone.(type) {
+		var outClone ledgerstate.Output
+		switch o := out.(type) {
 		case *ledgerstate.SigLockedColoredOutput:
-			o.UpdateMintingColor()
+			outClone = o.UpdateMintingColor()
 		case *ledgerstate.SigLockedSingleOutput:
+			outClone = out.Clone()
 		default:
 			panic("utxodb.AddTransaction: unknown type")
 		}
@@ -150,7 +151,10 @@ func (u *UtxoDB) validate(tx *ledgerstate.Transaction) error {
 	if err != nil {
 		return xerrors.Errorf("utxodb.validate: wrong inputs: %v", err)
 	}
-	outbals, outsum := collectOutputBalances(tx)
+	outbals, outsum, err := collectOutputBalances(tx)
+	if err != nil {
+		return err
+	}
 	if insum != outsum {
 		return xerrors.New("utxodb.validate unequal totals")
 	}
@@ -244,17 +248,22 @@ func (u *UtxoDB) collectInputBalances(tx *ledgerstate.Transaction) (map[ledgerst
 	return ret, retsum, nil
 }
 
-func collectOutputBalances(tx *ledgerstate.Transaction) (map[ledgerstate.Color]uint64, uint64) {
+func collectOutputBalances(tx *ledgerstate.Transaction) (map[ledgerstate.Color]uint64, uint64, error) {
 	ret := make(map[ledgerstate.Color]uint64)
 	retsum := uint64(0)
 
+	var err error
 	for _, out := range tx.Essence().Outputs() {
 		out.Balances().ForEach(func(col ledgerstate.Color, bal uint64) bool {
+			if bal == 0 {
+				err = xerrors.New("collectOutputBalances: zero balance in output not allowed")
+				return false
+			}
 			s, _ := ret[col]
 			ret[col] = s + bal
 			retsum += bal
 			return true
 		})
 	}
-	return ret, retsum
+	return ret, retsum, err
 }

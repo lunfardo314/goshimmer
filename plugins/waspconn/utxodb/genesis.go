@@ -76,7 +76,7 @@ const RequestFundsAmount = 1337 // same as Goshimmer Faucet
 func (u *UtxoDB) mustRequestFundsTx(target ledgerstate.Address) *ledgerstate.Transaction {
 	sourceOutputs := u.GetAddressOutputs(u.GetGenesisAddress())
 	builder := txutil.NewBuilder(sourceOutputs)
-	if err := builder.AddIOTATransfer(target, RequestFundsAmount); err != nil {
+	if _, err := builder.AddIOTAOutput(target, RequestFundsAmount); err != nil {
 		panic(err)
 	}
 	return builder.BuildWithED25519(u.genesisKeyPair)

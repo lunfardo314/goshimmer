@@ -3,7 +3,6 @@ package txutil
 
 import (
 	"github.com/iotaledger/goshimmer/packages/ledgerstate"
-	"golang.org/x/xerrors"
 )
 
 type ConsumableOutput struct {
@@ -57,14 +56,32 @@ func ConsumableBalance(color ledgerstate.Color, consumables ...*ConsumableOutput
 	return ret
 }
 
-// ConsumeColoredTokens specified amount of colored tokens sequentially from specified ConsumableOutputs
+func EnoughBalance(color ledgerstate.Color, amount uint64, consumables ...*ConsumableOutput) bool {
+	consumable := ConsumableBalance(color, consumables...)
+	return consumable >= amount
+}
+
+func EnoughBalances(amounts map[ledgerstate.Color]uint64, consumables ...*ConsumableOutput) bool {
+	for color, amount := range amounts {
+		if !EnoughBalance(color, amount, consumables...) {
+			return false
+		}
+	}
+	return true
+}
+
+// ConsumeColored specified amount of colored tokens sequentially from specified ConsumableOutputs
 // return nil if it was a success.
 // In case of failure ConsumableOutputs remain unchanged
-func ConsumeColoredTokens(addTo map[ledgerstate.Color]uint64, color ledgerstate.Color, amount uint64, consumables ...*ConsumableOutput) error {
-	consumable := ConsumableBalance(color, consumables...)
-	if consumable < amount {
-		return xerrors.New("ConsumeColoredTokens: not enough balance")
+func ConsumeColored(color ledgerstate.Color, amount uint64, consumables ...*ConsumableOutput) bool {
+	if !EnoughBalance(color, amount, consumables...) {
+		return false
 	}
+	MustConsumeColored(color, amount, consumables...)
+	return true
+}
+
+func MustConsumeColored(color ledgerstate.Color, amount uint64, consumables ...*ConsumableOutput) {
 	remaining := amount
 	for _, out := range consumables {
 		if remaining == 0 {
@@ -86,29 +103,40 @@ func ConsumeColoredTokens(addTo map[ledgerstate.Color]uint64, color ledgerstate.
 		}
 	}
 	if remaining != 0 {
-		panic("ConsumeColoredTokens: internal error")
+		panic("ConsumeColored: internal error")
 	}
-	s, _ := addTo[color]
-	addTo[color] = s + amount
-	return nil
 }
 
-func ConsumeIOTA(amount uint64, consumables ...*ConsumableOutput) error {
-	addTo := make(map[ledgerstate.Color]uint64)
-	return ConsumeColoredTokens(addTo, ledgerstate.ColorIOTA, amount, consumables...)
+func ConsumeIOTA(amount uint64, consumables ...*ConsumableOutput) bool {
+	return ConsumeColored(ledgerstate.ColorIOTA, amount, consumables...)
+}
+
+func ConsumeAll(amounts map[ledgerstate.Color]uint64, consumables ...*ConsumableOutput) bool {
+	if !EnoughBalances(amounts, consumables...) {
+		return false
+	}
+	for color, amount := range amounts {
+		MustConsumeColored(color, amount, consumables...)
+	}
+	return true
 }
 
 // ConsumeRemaining consumes all remaining tokens and return map of consumed balances
-func ConsumeRemaining(addTo map[ledgerstate.Color]uint64, consumables ...*ConsumableOutput) {
+func ConsumeRemaining(consumables ...*ConsumableOutput) map[ledgerstate.Color]uint64 {
+	ret := make(map[ledgerstate.Color]uint64)
 	for _, out := range consumables {
 		for col, bal := range out.remain {
+			if bal == 0 {
+				continue
+			}
 			cons, _ := out.consumed[col]
 			out.consumed[col] = cons + bal
-			total, _ := addTo[col]
-			addTo[col] = total + bal
+			total, _ := ret[col]
+			ret[col] = total + bal
 		}
 		out.remain = make(map[ledgerstate.Color]uint64) // clear remaining
 	}
+	return ret
 }
 
 func SelectConsumed(consumables ...*ConsumableOutput) []*ConsumableOutput {
